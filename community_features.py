@@ -142,7 +142,7 @@ def find_adaptive_resolutions(
         mods = [tried[r] for r in res_list]
 
         # stop if last modularity is too low
-        if mods[-1] <= min_modularity:
+        if mods[-1] <= min_modularity and res_list[-1] > 1:
             print(f"[⛔] Modularity {mods[-1]:.4f} ≤ threshold {min_modularity}")
             break
 
