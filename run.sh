@@ -8,7 +8,7 @@ python main_community.py --dataset squirrel-filtered --res '.1' --comres 1 --epo
 python main_community.py --dataset chameleon-filtered --res 'none' --comres 1 --epochs 30 --batch_size 256 --num_layers 1 --dropout 0.5 --min_q 0.7 --del_q 0.1 --train_prop 0.6 --valid_prop 0.2 --runs 10 --metric acc --lr .001
 python main_community.py --dataset actor --res 'None' --comres 1 --epochs 200 --batch_size 128 --num_layers 3  --dropout 0.8 --min_q 1 --del_q 0.1 --train_prop 0.6 --valid_prop 0.2 --runs 10 --rand_split --metric acc
 python main_community.py --dataset tolokers --res '0.5 0.75 1 1.364' --comres 1 --epochs 2000 --batch_size 512 --dropout 0.5 --num_layers 2 --min_q 0.3 --del_q 0.1 --metric rocauc --runs 10 --display_step 100
-python main_community.py --dataset pubmed --res 'None' --comres 1 --epochs 1000 --batch_size 4000 --dropout 0.7 --num_layers 3 --min_q 0.6 --del_q 0.07 --metric acc --runs 10 --display_step 100  --train_prop 0.6 --valid_prop 0.2 --rand_split
+python main_community.py --dataset pubmed --res '0.5 1 1.956' --comres 1 --epochs 300 --batch_size 8000 --dropout 0.7 --num_layers 3 --min_q 0.7 --del_q 0.1 --metric acc --runs 10 --display_step 100  --train_prop 0.6 --valid_prop 0.2 --rand_split --lr .001
 
 
 
