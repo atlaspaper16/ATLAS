@@ -24,7 +24,7 @@ python main_community.py --dataset pubmed --res '0.5 1 1.956' --comres 1 --epoch
 
 
 
-python main_community.py --dataset flickr --res 'None' --num_layer 3 --epochs 60 --batch_size 512 --runs 10 --min_q 0.1 --dropout .7 --lr .0001 --metric acc --del_q 0.04
+python main_community.py --dataset flickr --res 'None' --num_layer 2 --epochs 20 --batch_size 1024 --runs 10 --min_q 0.1 --dropout .7 --lr .001 --metric acc --del_q 0.01 --hidden_channel 256
 python main_community.py --dataset reddit2 --res 'None' --epochs 1000 --batch_size 8000 --runs 10 --min_q  0.3 --del_q 0.3 --metric acc
 python main_community.py --dataset yelp --res 'None' --epochs 300 --batch_size 32000 --hidden_channels 2048 --num_layers 5 --dropout 0.5 --runs 10 --min_q 1 --lr .00005
 python main_community.py --dataset amazon-products --res 'None' --epochs 200 --batch_size 64000 --hidden_channels 2048 --num_layers 5  --dropout 0.5 --runs 10 --min_q 1.0 --eval_batch --lr .00005
