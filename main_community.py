@@ -446,27 +446,33 @@ if __name__ == "__main__":
             t_eval = time.time() - t_eval0
             """
             # --- EVAL ---
-            t_eval0 = time.time()
+            
             if args.eval_batch:
+                t_eval0 = time.time()
                 # Mini-batch evaluation (no x_all_full build)
                 train_acc, val_acc, test_acc, val_loss, _ = evaluate_batch_forward(
                                         model, dataset, split_idx, args, criterion,
                                         community_embeddings, all_community_ids, args.batch_size, bce_loss
                                         )
+                t_eval = time.time() - t_eval0
+                eval_times.append(t_eval)
             else:
     # Full-batch evaluation (existing path)
                 x_all_full = build_full_features(dataset,
                                      dataset.graph['node_feat'].to(device),
                                      community_embeddings, all_community_ids, device)
+                t_eval0 = time.time()
                 train_acc, val_acc, test_acc, val_loss, _ = evaluate_fullbatch_forward(
                         model, dataset, split_idx, args, criterion, x_all_full, bce_loss
                         )
+                t_eval = time.time() - t_eval0
+                eval_times.append(t_eval)
 
 
 
-            t_eval = time.time() - t_eval0
+            
             train_times.append(t_train)
-            eval_times.append(t_eval)
+            
 
             if val_acc > best_val:
                 best_val = val_acc
