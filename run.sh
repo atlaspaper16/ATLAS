@@ -2,7 +2,7 @@ python main_community.py --dataset amazon-ratings --res 'None' --comres 1 --epoc
 python main_community.py --dataset roman-empire --res 'None' --comres 1 --epochs 500 --batch_size 512 --min_q 1.0 --del_q 0.1 --runs 10 --metric acc
 python main_community.py --dataset cora --res 'none' --comres 1 --epochs 200 --hidden_channels 256  --batch_size 128  --min_q 0.1 --del_q 0.2  --train_prop 0.6 --valid_prop 0.2 --rand_split --runs 10 --display_step 100 --metric acc
 
-python main_community.py --dataset squirrel-filtered --res '.1' --comres 1 --epochs 40 --batch_size 512 --num_layers 3 --dropout .5 --min_q .61 --del_q 0.05 --runs 10 --metric acc --display_step 20 --lr .005
+python main_community.py --dataset squirrel-filtered --res '0' --comres 1 --epochs 20 --hidden_channels 600 --batch_size 600 --num_layers 3 --dropout 0.5 --min_q .61 --del_q 0.05 --runs 10 --metric acc --display_step 3 --lr .005 --weight_decay .000001
 
 
 python main_community.py --dataset chameleon-filtered --res 'none' --comres 1 --epochs 30 --batch_size 256 --num_layers 1 --dropout 0.5 --min_q 0.7 --del_q 0.1 --train_prop 0.6 --valid_prop 0.2 --runs 10 --metric acc --lr .001
