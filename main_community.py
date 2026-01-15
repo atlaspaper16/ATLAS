@@ -429,7 +429,7 @@ if __name__ == "__main__":
             t_train = time.time() - t_train0
 
             # Build full-batch features OUTSIDE the eval timer
-            x_all_full = build_full_features(dataset, x_base, community_embeddings, all_community_ids, device)
+            #x_all_full = build_full_features(dataset, x_base, community_embeddings, all_community_ids, device)
             
 
             if torch.cuda.is_available():
@@ -447,7 +447,7 @@ if __name__ == "__main__":
             """
             # --- EVAL ---
             
-            if args.eval_batch:
+            if args.eval_batch and epoch % args.display_step == 0 :
                 t_eval0 = time.time()
                 # Mini-batch evaluation (no x_all_full build)
                 train_acc, val_acc, test_acc, val_loss, _ = evaluate_batch_forward(
@@ -456,7 +456,7 @@ if __name__ == "__main__":
                                         )
                 t_eval = time.time() - t_eval0
                 eval_times.append(t_eval)
-            else:
+            elif epoch % args.display_step == 0:
     # Full-batch evaluation (existing path)
                 x_all_full = build_full_features(dataset,
                                      dataset.graph['node_feat'].to(device),
