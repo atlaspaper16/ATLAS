@@ -17,6 +17,7 @@ python main_community.py --dataset pubmed --res '0.5 1 1.956' --comres 1 --epoch
 
 
 
+python main_community.py --dataset ogbn-products --res '0.5 1 3.214 11.941 30.679 57.611 108.799 200.231 362.663 675.602 1183.541' --epochs 400 --batch_size 100000 --lr .0001 --weight_decay 0.005 --dropout 0.5 --runs 10 --metric acc --min_q 0.3 --del_q 0.2 --hidden_channels 1600  --eval_batch
 
 
 
