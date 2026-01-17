@@ -17,7 +17,6 @@ python main_community.py --dataset pubmed --res '0.5 1 1.956' --comres 1 --epoch
 
 
 
-python main_community.py --dataset ogbn-products --res '0.5 1 3.214 11.941 30.679 57.611 108.799 200.231 362.663 675.602 1183.541' --epochs 500 --batch_size 100000 --lr .0001 --weight_decay 0.005 --dropout 0.5 --runs 10 --metric acc --min_q 0.3 --del_q 0.2 --hidden_channels 1600 --eval_batch --display_step 50
 
 
 
@@ -28,4 +27,4 @@ python main_community.py --dataset flickr --res '0.5 0.516 0.531 0.562 0.594 0.6
 python main_community.py --dataset reddit2 --res 'None' --epochs 1000 --batch_size 8000 --runs 10 --min_q  0.3 --del_q 0.3 --metric acc
 python main_community.py --dataset yelp --res 'None' --epochs 300 --batch_size 32000 --hidden_channels 2048 --num_layers 5 --dropout 0.5 --runs 10 --min_q 1 --lr .00005
 python main_community.py --dataset amazon-products --res 'None' --epochs 200 --batch_size 64000 --hidden_channels 2048 --num_layers 5  --dropout 0.5 --runs 10 --min_q 1.0 --eval_batch --lr .00005
-python main_community.py --dataset ogbn-products --res 'None' --epochs 400 --batch_size 32000 --dropout 0.5 --runs 10 --metric acc --min_q 0.3 --del_q 0.1
+python main_community.py --dataset ogbn-products --res '0.5 1 3.214 11.941 30.679 57.611 108.799 200.231 362.663 675.602 1183.541' --epochs 400 --batch_size 100000 --lr .0001 --weight_decay 0.005 --dropout 0.5 --runs 10 --metric acc --min_q 0.3 --del_q 0.2 --hidden_channels 1600 --eval_batch --display_step 50
