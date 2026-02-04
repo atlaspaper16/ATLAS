@@ -11,6 +11,7 @@ python main_community.py   --dataset actor   --res 'None' --comres 1   --epochs 
 python main_community.py   --dataset actor   --res 'None' --comres 1   --epochs 400   --batch_size 7600   --num_layers 3   --dropout 0.8   --hidden_channels 256   --lr 0.0001 --weight_decay 0.001   --train_prop 0.6 --valid_prop 0.2   --runs 10 --rand_split   --metric acc --display_step 50 --min_q 1 --del_q 0.1 --weight_decay 0.001 --LPF 2
 
 python main_community.py --dataset tolokers --res '0.5 0.75 1 1.364' --comres 1 --epochs 2000 --batch_size 512 --dropout 0.5 --num_layers 2 --min_q 0.3 --del_q 0.1 --metric rocauc --runs 10 --display_step 100
+python main_community.py --dataset tolokers --res '0.5 0.75 1 1.364' --comres 1 --epochs 2000 --batch_size 512 --dropout 0.5 --num_layers 2 --min_q 0.3 --del_q 0.1 --metric rocauc --runs 10 --display_step 100 --LPF 3
 python main_community.py --dataset pubmed --res '0.5 1 1.956' --comres 1 --epochs 300 --batch_size 8000 --dropout 0.7 --num_layers 3 --min_q 0.7 --del_q 0.1 --metric acc --runs 10 --display_step 100  --train_prop 0.6 --valid_prop 0.2 --rand_split --lr .001
 
 python main_community.py --dataset questions --res 'none' --comres 1 --epochs 70 --batch_size 256 --num_layers 0 --dropout 0.8 --min_q 0.7 --del_q 0.1 --train_prop 0.6 --valid_prop 0.2 --runs 10 --metric rocauc --lr .0001 --weight_decay 0 --hidden_channels 128 --LPF 2 --NF
