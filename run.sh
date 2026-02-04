@@ -8,6 +8,7 @@ python main_community.py --dataset squirrel-filtered --res '0' --comres 1 --epoc
 
 
 python main_community.py --dataset chameleon-filtered --res 'none' --comres 1 --epochs 30 --batch_size 256 --num_layers 1 --dropout 0.5 --min_q 0.7 --del_q 0.1 --train_prop 0.6 --valid_prop 0.2 --runs 10 --metric acc --lr .001
+python main_community.py --dataset chameleon-filtered --res 'none' --comres 1 --epochs 30 --batch_size 256 --num_layers 1 --dropout 0.5 --min_q 0.7 --del_q 0.1 --train_prop 0.6 --valid_prop 0.2 --runs 10 --metric acc --lr .001 --LPF 2
 python main_community.py   --dataset actor   --res 'None' --comres 1   --epochs 400   --batch_size 7600   --num_layers 3   --dropout 0.8   --hidden_channels 256   --lr 0.0001 --weight_decay 0.001   --train_prop 0.6 --valid_prop 0.2   --runs 10 --rand_split   --metric acc --display_step 50 --min_q 1 --del_q 0.1 --weight_decay 0.001
 python main_community.py   --dataset actor   --res 'None' --comres 1   --epochs 400   --batch_size 7600   --num_layers 3   --dropout 0.8   --hidden_channels 256   --lr 0.0001 --weight_decay 0.001   --train_prop 0.6 --valid_prop 0.2   --runs 10 --rand_split   --metric acc --display_step 50 --min_q 1 --del_q 0.1 --weight_decay 0.001 --LPF 2
 
