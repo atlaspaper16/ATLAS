@@ -1,4 +1,5 @@
 python main_community.py --dataset amazon-ratings --res 'None' --comres 1 --epochs 1500 --batch_size 512 --min_q 0.6 --del_q 0.1 --runs 10 --metric acc --display_step 100
+python main_community.py --dataset amazon-ratings --res 'None' --comres 1 --epochs 1500 --batch_size 512 --min_q 0.6 --del_q 0.1 --runs 10 --metric acc --display_step 100 --LPF 2
 python main_community.py --dataset roman-empire --res 'None' --comres 1 --epochs 600 --batch_size 11600 --min_q 1.0 --del_q 0.1 --runs 10 --metric acc --display_step 100  --lr .01 --hidden_channels 792 --num_layers 3
 python main_community.py --dataset cora --res 'none' --comres 1 --epochs 200 --hidden_channels 256  --batch_size 128  --min_q 0.1 --del_q 0.2  --train_prop 0.6 --valid_prop 0.2 --rand_split --runs 10 --display_step 100 --metric acc
 
