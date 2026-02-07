@@ -25,7 +25,7 @@ python main_community.py --dataset pubmed --res '0.5 1 1.956' --epochs 300 --bat
 
 python main_community.py --dataset questions --res '.3' --epochs 100 --batch_size 256 --num_layers 0 --dropout 0.8 --min_q 0.5 --del_q 0.1 --train_prop 0.6 --valid_prop 0.2 --runs 10 --metric rocauc --lr .0001 --weight_decay 0.0000005 --hidden_channels 128  --display_step 20
 python main_community.py --dataset questions --res '.3' --epochs 100 --batch_size 256 --num_layers 0 --dropout 0.8 --min_q 0.5 --del_q 0.1 --train_prop 0.6 --valid_prop 0.2 --runs 10 --metric rocauc --lr .0001 --weight_decay 0.0000005 --hidden_channels 128  --display_step 20  --NF
-python main_community.py --dataset questions --res '.3' --epochs 100 --batch_size 256 --num_layers 0 --dropout 0.8 --min_q 0.5 --del_q 0.1 --train_prop 0.6 --valid_prop 0.2 --runs 10 --metric rocauc --lr .0001 --weight_decay 0.0000005 --hidden_channels 128  --display_step 20 --LPF 1 --NF
+python main_community.py --dataset questions --res '.3' --epochs 100 --batch_size 256 --num_layers 0 --dropout 0.8 --min_q 0.5 --del_q 0.1 --train_prop 0.6 --valid_prop 0.2 --runs 10 --metric rocauc --lr .0001 --weight_decay 0.0000005 --hidden_channels 128  --display_step 20 --LPF 2 --NF
 
 
 
