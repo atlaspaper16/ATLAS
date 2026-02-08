@@ -13,9 +13,12 @@ from dataset import load_dataset
 from data_utils import *
 from model_community import MLPWithCommunityEmbedding
 from logger import Logger, save_result
-
+import os
 import gc
 import torch
+import random
+
+
 
 def _cuda_cleanup(local_ns: dict):
     """Delete common CUDA-heavy refs, then flush allocator."""
@@ -49,16 +52,13 @@ def fix_seed(seed: int = 0):
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed(seed)
-        torch.cuda.manual_seed_all(seed)
-
 
 # -------------------------------
 # Feature assembly per batch of node IDs
 # -------------------------------
 def load_features_for_nodes(batch_nodes: torch.Tensor,
-                            x_base: torch.Tensor,
+
+        x_base: torch.Tensor,
                             community_embeddings,
                             all_community_ids):
     """
@@ -302,6 +302,164 @@ def evaluate_fullbatch_forward(model, data, split_idx, args, criterion, x_all, b
     return results['train'], results['valid'], results['test'], float(val_loss.item()), logits_all
 
 
+
+
+
+@torch.no_grad()
+def label_propagate_train(
+    data,
+    y,                      # (N,) class ids OR (N,C) soft/one-hot
+    train_idx,              # indices of train nodes
+    device,
+    num_hops: int = 1,
+    num_classes: int = None,
+    normalize: bool = True,
+    make_undirected: bool = True,
+    return_concat: bool = True,  
+    eps: float = 1e-12,
+):
+    """
+    Seed with TRAIN labels only, then do multi-hop propagation: Y^(k) = A Y^(k-1)
+    Uses ORIGINAL adjacency from data.graph["edge_index"].
+    If return_concat=False: returns Y^(H) with shape [N, C].
+    """
+    if num_hops < 1:
+        raise ValueError("num_hops must be >= 1")
+    if "edge_index" not in data.graph:
+        raise ValueError("data.graph['edge_index'] missing")
+    
+    print("Label Propagation working")
+
+    edge_index = data.graph["edge_index"]
+    N = data.num_nodes
+    row, col = edge_index.to(device)  # row=target, col=source
+
+    if make_undirected:
+        row, col = torch.cat([row, col]), torch.cat([col, row])
+
+    idx = torch.stack([row, col], dim=0)
+    val = torch.ones(idx.size(1), device=device, dtype=torch.float32)
+    A = torch.sparse_coo_tensor(idx, val, (N, N), device=device).coalesce()
+
+    if normalize:  # row-normalize A
+        r = A.indices()[0]
+        v = A.values()
+        deg = torch.zeros(N, device=device, dtype=v.dtype).scatter_add_(0, r, v).clamp(min=1.0)
+        v = v / (deg[r] + eps)
+        A = torch.sparse_coo_tensor(A.indices(), v, (N, N), device=device).coalesce()
+
+    train_idx = train_idx.to(device=device, dtype=torch.long)
+    y = y.to(device)
+
+    # seed Y0 (train only)
+    if y.dim() == 1:
+        if num_classes is None:
+            num_classes = int(y.max().item()) + 1
+        Y0 = torch.zeros((N, num_classes), device=device, dtype=torch.float32)
+        Y0[train_idx] = F.one_hot(y[train_idx].long(), num_classes=num_classes).float()
+    else:
+        C = y.size(1)
+        Y0 = torch.zeros((N, C), device=device, dtype=torch.float32)
+        Y0[train_idx] = y[train_idx].float()
+
+    Y = Y0
+
+    if return_concat:
+        outs = []
+        for _ in range(num_hops):
+            Y = torch.sparse.mm(A, Y)
+            outs.append(Y)
+        return torch.cat(outs, dim=1)
+    else:
+        for _ in range(num_hops):
+            Y = torch.sparse.mm(A, Y)
+        return Y
+
+
+
+
+
+
+
+
+def aggregate_neighbor_features(
+    data,
+    x_base: torch.Tensor,
+    device: torch.device,
+    num_hops: int = 1,
+):
+    """
+    Compute multi-hop neighbor-aggregated features using edge_index.
+
+    For each hop k, we compute:
+        X^{(k)} = A X^{(k-1)},  with  X^{(0)} = X_base
+    and return the concatenation:
+        [X^{(1)} || X^{(2)} || ... || X^{(num_hops)}]
+
+    Implementation does the aggregation on CPU in chunks to avoid GPU OOM.
+
+    Args:
+        data: object with data.graph['edge_index'] of shape [2, E]
+        x_base (Tensor): [N, F] base features X
+        device (torch.device): target device for the output
+        num_hops (int): number of hops n (n >= 1)
+
+    Returns:
+        x_multi (Tensor): [N, F * num_hops] concatenation of hop features
+    """
+    print("Neighbor Features working!")
+    if 'edge_index' not in data.graph:
+        # No edges -> all neighbor features zero
+        N, F = x_base.size()
+        return torch.zeros(N, F * num_hops, device=device, dtype=x_base.dtype)
+
+    # Work on CPU to avoid GPU memory blow-up
+    edge_index = data.graph['edge_index']
+    if edge_index.is_cuda:
+        edge_index = edge_index.cpu()
+
+    x_curr_cpu = x_base.detach().cpu()
+
+    if edge_index.dim() != 2 or edge_index.size(0) != 2:
+        raise ValueError("edge_index must have shape [2, E]")
+
+    row, col = edge_index  # treat row as target, col as source
+
+    E = edge_index.size(1)
+    feat_dim = x_curr_cpu.size(1)
+    bytes_per_val = x_curr_cpu.element_size()  # usually 4 for float32
+
+    # Target ~128MB per chunk for x_curr_cpu[col_chunk]
+    target_chunk_bytes = 128 * 1024 * 1024
+    edges_per_chunk = max(1, target_chunk_bytes // (feat_dim * bytes_per_val))
+
+    hop_features = []
+
+    for hop in range(num_hops):
+        # x_neigh_cpu = A * x_curr_cpu
+        x_neigh_cpu = torch.zeros_like(x_curr_cpu)
+
+        for start in range(0, E, edges_per_chunk):
+            end = min(E, start + edges_per_chunk)
+            row_chunk = row[start:end]
+            col_chunk = col[start:end]
+            x_neigh_cpu.index_add_(0, row_chunk, x_curr_cpu[col_chunk])
+
+        hop_features.append(x_neigh_cpu)
+        # Next hop aggregates from this hop's representation
+        x_curr_cpu = x_neigh_cpu
+
+    # Concatenate [X^{(1)} || ... || X^{(num_hops)}] along feature dim
+    x_multi_cpu = torch.cat(hop_features, dim=1)
+    x_multi = x_multi_cpu.to(device)
+
+    return x_multi
+
+
+
+
+
+
 # -------------------------------
 # MAIN
 # -------------------------------
@@ -321,6 +479,21 @@ if __name__ == "__main__":
         dataset.label = dataset.label.unsqueeze(1)
     dataset.label = dataset.label.to(device)
     x_base = dataset.graph['node_feat'].to(device)
+
+
+
+
+    if args.NF:
+        x_neigh = aggregate_neighbor_features(dataset, x_base, device)
+        x_aug = torch.cat([x_base, x_neigh], dim=1)
+        dataset.graph['node_feat'] = x_aug
+        x_base = x_aug
+
+
+
+    lpf_enabled = (args.LPF > 0)
+
+
 
     # Output dimension
     if dataset.label.dim() == 2 and dataset.label.size(1) > 1:
@@ -348,7 +521,18 @@ if __name__ == "__main__":
 
     logger = Logger(args.runs)
 
+    split_idx_lst = []
+    
+    x_base0_cpu = dataset.graph['node_feat'].detach().cpu()
+
+
     for run in range(args.runs):
+
+        # Reset node features so runs are independent (prevents leakage across runs)
+        x_base = x_base0_cpu.to(device)
+        dataset.graph['node_feat'] = x_base
+
+
         print(f"\n========== Run {run} / {args.runs - 1} ==========")
 
         # --- Community embeddings (preprocessing) ---
@@ -359,25 +543,47 @@ if __name__ == "__main__":
         )
         clustering_time = time.time() - t0
         print(f"End Community Detection, Time: {clustering_time:.3f}s")
-
+        
         # --- Splits ---
         if args.rand_split:
-            split_idx_lst = []
-            train_idx, val_idx, test_idx = rand_train_test_idx(
-                dataset.label,
-                train_prop=args.train_prop,
-                valid_prop=args.valid_prop,
-                pkl_path=f"comm_res{best_r}.pkl" if best_r is not None else None
-            )
+            #random.seed(args.seed)
+            #fix_seed(args.seed)
+
+            train_idx, val_idx, test_idx =  rand_train_test_idx(
+                
+                    dataset.label,
+                    train_prop=args.train_prop,
+                    valid_prop=args.valid_prop,
+                    pkl_path=f"comm_res{best_r}.pkl" if best_r is not None else None
+                )
+                
             split_idx_lst.append(
-             {'train': train_idx.to(device),
+                    {'train': train_idx.to(device),
                          'valid': val_idx.to(device),
                          'test':  test_idx.to(device)})
+            
         else:
             split_idx_lst = [
                 {k: v.to(device) for k, v in splits.items()}
                     for splits in load_fixed_splits(args.data_dir, dataset, name=args.dataset, pkl_path="")
                 ]
+            fix_seed(args.seed)
+
+        if len(split_idx_lst) > 1:
+            split_idx = split_idx_lst[run]
+        elif len(split_idx_lst) == 1:
+            split_idx = split_idx_lst[0]
+
+
+        train_idx = split_idx["train"]                                                  
+        
+        if lpf_enabled:
+            y_lp = label_propagate_train(dataset, dataset.label, train_idx, x_base.device, num_hops=args.LPF)
+            x_aug = torch.cat([x_base, y_lp], dim=1)
+            dataset.graph["node_feat"] = x_aug
+            x_base = x_aug
+
+
         # --- Model ---
         comm_feat_dim = (len(num_communities_list) * args.emb_dim) if community_embeddings is not None else 0
         input_dim = x_base.size(1) + comm_feat_dim
@@ -401,12 +607,6 @@ if __name__ == "__main__":
             )
         
 
-        # --- Split selection ---
-        #split_idx = split_idx_lst[0] if args.rand_split else split_idx_lst[run]
-        if len(split_idx_lst) > 1:
-            split_idx = split_idx_lst[run]
-        elif len(split_idx_lst) == 1:
-            split_idx = split_idx_lst[0]
         print("Num train:", len(split_idx["train"]))
         print("Num valid:", len(split_idx["valid"]))
         print("Num test:",  len(split_idx["test"]))
@@ -446,33 +646,25 @@ if __name__ == "__main__":
             t_eval = time.time() - t_eval0
             """
             # --- EVAL ---
-            
-            if args.eval_batch and epoch % args.display_step == 0 :
-                t_eval0 = time.time()
-                # Mini-batch evaluation (no x_all_full build)
+            t_eval0 = time.time()
+            if args.eval_batch and epoch % args.display_step == 0:
                 train_acc, val_acc, test_acc, val_loss, _ = evaluate_batch_forward(
                                         model, dataset, split_idx, args, criterion,
                                         community_embeddings, all_community_ids, args.batch_size, bce_loss
                                         )
-                t_eval = time.time() - t_eval0
-                eval_times.append(t_eval)
             elif epoch % args.display_step == 0:
-    # Full-batch evaluation (existing path)
                 x_all_full = build_full_features(dataset,
                                      dataset.graph['node_feat'].to(device),
                                      community_embeddings, all_community_ids, device)
-                t_eval0 = time.time()
                 train_acc, val_acc, test_acc, val_loss, _ = evaluate_fullbatch_forward(
                         model, dataset, split_idx, args, criterion, x_all_full, bce_loss
                         )
-                t_eval = time.time() - t_eval0
-                eval_times.append(t_eval)
 
 
 
-            
+            t_eval = time.time() - t_eval0
             train_times.append(t_train)
-            
+            eval_times.append(t_eval)
 
             if val_acc > best_val:
                 best_val = val_acc
@@ -499,7 +691,6 @@ if __name__ == "__main__":
         args.res = init_res
         _cuda_cleanup(locals())
 
-    # Final summary and save
     # Final summary and save
     results = logger.print_statistics(args, clustering_time, training_time, run=None, mode='max_acc')
     save_result(args, results)
