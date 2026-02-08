@@ -37,6 +37,7 @@ class MLPWithCommunityEmbedding(nn.Module):
             x = lin(x)
             x = norm(x)
             x = F.gelu(x)
+            #x = F.relu(x)
             x = F.dropout(x, p=self.dropout, training=self.training)
         return x
 
@@ -49,4 +50,3 @@ class MLPWithCommunityEmbedding(nn.Module):
         """Log-probabilities (log_softmax). Use for single-label with NLLLoss."""
         x = self._trunk(x)
         return F.log_softmax(self.lins[-1](x), dim=-1)
-
