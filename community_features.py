@@ -12,6 +12,11 @@ import os
 import torch.nn as nn
 import gc
 import statistics
+import os
+from collections import defaultdict
+import math
+import random
+
 # ========== GPU UTILS ==========
 import collections
 has_gpu = False
@@ -23,18 +28,8 @@ except ImportError:
 
 
 
-def num_connected_components(G):
-    # cuGraph API moved in newer versions; try new then old
-    try:
-        df = cugraph.components.connected_components(G)
-    except AttributeError:
-        df = cugraph.connected_components(G)
 
-    # Column name is usually "labels" (sometimes "component")
-    label_col = 'labels' if 'labels' in df.columns else ('component' if 'component' in df.columns else None)
-    if label_col is None:
-        raise RuntimeError(f"Unexpected CC output columns: {df.columns}")
-    return int(df[label_col].nunique()), df  # (count, per-vertex labels)
+
 
 def build_cugraph(data):
     edge_index = data.graph['edge_index']
@@ -49,7 +44,95 @@ def build_cugraph(data):
 
 
 
+def compute_nmi_from_partition_and_labels(partition, labels_np, return_stats: bool = False):
+    """
+    Compute NMI(C, L) between community partition (C) and labels (L) as in ATLAS:
+        NMI = 2 * I(L; C) / (H(L) + H(C)).
 
+    If return_stats=True, returns a dict with:
+        {"nmi": ..., "I": ..., "H_L": ..., "H_C": ...}
+    else returns only the NMI float (backward compatible).
+
+    partition: list/1D array of community IDs (len = num_nodes)
+    labels_np: 1D numpy array of integer class labels (len = num_nodes)
+    """
+    partition = np.asarray(partition)
+    labels_np = np.asarray(labels_np)
+    assert partition.shape[0] == labels_np.shape[0]
+
+    n = partition.shape[0]
+
+    # Map labels and communities to compact indices
+    label_vals, label_idx = np.unique(labels_np, return_inverse=True)
+    comm_vals, comm_idx = np.unique(partition, return_inverse=True)
+    m = label_vals.shape[0]
+    k = comm_vals.shape[0]
+
+    # Contingency table n_ij
+    n_ij = np.zeros((m, k), dtype=np.float64)
+    for i in range(n):
+        n_ij[label_idx[i], comm_idx[i]] += 1.0
+
+    # Marginals
+    n_i = n_ij.sum(axis=1)  # label counts
+    n_j = n_ij.sum(axis=0)  # community counts
+
+    # Probabilities
+    p_ij = n_ij / n
+    p_i = n_i / n
+    p_j = n_j / n
+
+    # Mutual information I(L;C)
+    I = 0.0
+    for a in range(m):
+        for b in range(k):
+            if p_ij[a, b] > 0:
+                I += p_ij[a, b] * math.log(p_ij[a, b] / (p_i[a] * p_j[b]))
+
+    # Entropies H(L), H(C)
+    H_L = -sum(pi * math.log(pi) for pi in p_i if pi > 0)
+    H_C = -sum(pj * math.log(pj) for pj in p_j if pj > 0)
+
+    denom = H_L + H_C
+    nmi_val = 0.0 if denom <= 0 else 2.0 * I / denom
+
+    print(
+        f"    [NMI] I(L;C)={I:.6f}, "
+        f"H(L)={H_L:.6f}, H(C)={H_C:.4f}, "
+        f"H(L)+H(C)={H_L + H_C:.4f}, "
+        f"NMI={nmi_val:.4f}"
+    )
+
+    if return_stats:
+        return {"nmi": nmi_val, "I": I, "H_L": H_L, "H_C": H_C}
+    return nmi_val
+
+
+def theorem1_refinement_check(base_stats: dict, new_stats: dict):
+    """
+    Theorem-1 condition check (Section 2, Theorem 1 in ATLAS):
+
+        ΔI / ΔH  >  NMI(C;L)/2
+
+    where:
+        ΔI = I(C';L) - I(C;L)
+        ΔH = H(C')   - H(C)
+
+    Notes:
+    - We use H(C) = H_C returned above (community entropy).
+    - The theorem assumes ΔH > 0 (non-degenerate refinement). If ΔH <= 0, we mark FAIL.
+    """
+    delta_I = new_stats["I"] - base_stats["I"]
+    delta_H = new_stats["H_C"] - base_stats["H_C"]
+    threshold = base_stats["nmi"] / 2.0
+
+    if delta_H <= 0:
+        ratio = float("inf") if delta_H == 0 else (delta_I / delta_H)
+        return False, delta_I, delta_H, ratio, threshold
+
+    ratio = delta_I / delta_H
+    ok = ratio > threshold
+    return ok, delta_I, delta_H, ratio, threshold
 
 def run_louvain_gpu(G, num_nodes, resolution):
     #print(f"Running on GPU {num_nodes}")
@@ -114,30 +197,99 @@ def estimate_slope(tried):
 
 
 def find_adaptive_resolutions(
-    data, device, min_modularity=0.2, 
-     max_modularity_gap=0.1
+    data,
+    device,
+    min_modularity: float = 0.2,
+    max_modularity_gap: float = 0.1,
+    base_resolution: float = 0,
+    enforce_theorem1: bool = True,
 ):
-    delta_range=(0.1, .2)
+    """
+    Modularity-guided resolution search, augmented with Theorem-1 refinement check.
+
+    We fix the *base* partition C at `base_resolution` (default 0.1), then for every
+    candidate resolution r (forming C'), we check whether:
+
+        (ΔI / ΔH) > NMI(C;L)/2,
+
+    where:
+        ΔI = I(C';L) - I(C;L)
+        ΔH = H(C')   - H(C)
+
+    If `enforce_theorem1=True`, we still run the full search, but we APPLY the Theorem-1 test only at the end to filter the final `filtered_resolutions` list (post-search). If False, we only print PASS/FAIL and do not filter by Theorem-1.
+
+    Returns:
+        best_r, filtered_resolutions, partition_list, num_communities_list
+    """
+    delta_range = (0.1, 0.2)
     num_nodes = data.graph['num_nodes']
     tried, partitions = {}, {}
-    
-    initial_res = [0.5,1]
+    theorem1_ok = {}
+    theorem1_metrics = {}
+
+    initial_res = [0.5, 1.0]
     print("[🔧] Building graph")
 
-    # --- Run initial resolutions ---
-    print("[🚀] Running Louvain on initial resolutions")
-    for r in initial_res:
+    # --- prepare labels for NMI (1D numpy array) ---
+    labels = data.label
+    if labels.dim() > 1:
+        labels = labels.argmax(dim=1)
+    labels_np = labels.cpu().numpy()
+
+    # --- Build GPU graph once (if needed) ---
+    G = None
+    if device == 'cuda':
+        G = build_cugraph(data)
+
+    # --- Fixed base partition C at resolution=base_resolution ---
+    if device == 'cuda':
+        base_partition, base_Q = run_louvain_gpu(G, num_nodes, base_resolution)
+    else:
+        base_partition, base_Q = run_louvain_cpu(data, num_nodes, base_resolution)
+
+    base_stats = compute_nmi_from_partition_and_labels(base_partition, labels_np, return_stats=True)
+    print(
+        f"[BASE C] res={base_resolution} → {max(base_partition)+1} communities "
+        f"(Q={base_Q:.4f}, NMI={base_stats['nmi']:.4f})"
+    )
+
+    def eval_candidate(resolution: float):
+        """Run Louvain at `resolution`, compute NMI stats, check Theorem-1, optionally keep."""
+        if resolution in tried:
+            return
+
         if device == 'cuda':
-            G = build_cugraph(data)
-            partition, Q = run_louvain_gpu(G, num_nodes, r)
-            #partition, Q = cugraph.leiden(G, random_state=42, resolution=r)
+            partition, Q = run_louvain_gpu(G, num_nodes, resolution)
         else:
-            partition, Q = run_louvain_cpu(data, num_nodes, r)
-        tried[r] = Q
-        partitions[r] = partition
-        print(f"[✓] Resolution={r} → {max(partition)+1} communities (Q={Q:.4f})")
+            partition, Q = run_louvain_cpu(data, num_nodes, resolution)
+
+        new_stats = compute_nmi_from_partition_and_labels(partition, labels_np, return_stats=True)
+
+        ok, dI, dH, ratio, thr = theorem1_refinement_check(base_stats, new_stats)
+        theorem1_ok[resolution] = ok
+        theorem1_metrics[resolution] = {'dI': dI, 'dH': dH, 'ratio': ratio, 'thr': thr}
+        print(
+            f"    [Thm1 vs base@{base_resolution}] res={resolution} | "
+            f"ΔI={dI:.6f}, ΔH={dH:.6f}, ΔI/ΔH={ratio:.6f}, thr={thr:.6f}  =>  {'PASS' if ok else 'FAIL'}"
+        )
+
+        print(
+            f"[✓] Resolution={resolution} → {max(partition)+1} communities "
+            f"(Q={Q:.4f}, NMI={new_stats['nmi']:.4f})"
+        )
+
+        tried[resolution] = Q
+        partitions[resolution] = partition
+
+    # --- Initial resolutions ---
+    for r in initial_res:
+        eval_candidate(float(r))
+
     # --- Adaptive search loop ---
     while True:
+        if not tried:
+            break
+
         res_list = sorted(tried.keys())
         mods = [tried[r] for r in res_list]
 
@@ -148,7 +300,7 @@ def find_adaptive_resolutions(
 
         new_res = None
 
-        # 1. Interpolation: check gaps between known resolutions
+        # 1) Interpolation: check gaps between known resolutions
         for (r1, r2) in zip(res_list[:-1], res_list[1:]):
             Q1, Q2 = tried[r1], tried[r2]
             delta_q = abs(Q2 - Q1)
@@ -157,45 +309,51 @@ def find_adaptive_resolutions(
                 print(f"[➕] Interpolating {r1:.3f}–{r2:.3f} → {new_res} (ΔQ={delta_q:.4f})")
                 break
 
-        # 2. Extrapolation: extend beyond max resolution if modularity still good
+        # 2) Extrapolation: extend beyond max resolution if modularity still good
         if new_res is None:
             max_res, max_Q = res_list[-1], mods[-1]
             if max_Q > min_modularity:
                 delta_mod = np.random.uniform(*delta_range)
                 Q_target = max_Q - delta_mod
                 slope = estimate_slope(tried) or -0.05
+                # if slope is near zero, avoid exploding step
+                if abs(slope) < 1e-8:
+                    slope = -0.05
                 new_res = round(max_res + (Q_target - max_Q) / slope, 3)
                 print(f"[🔍] Extrapolating beyond {max_res} → {new_res} targeting Q≈{Q_target:.4f}")
 
-        # 3. Stop if no new resolution found
+        # 3) Stop if no new resolution found
         if new_res is None or new_res in tried:
             break
 
-        # --- Run Louvain for new resolution ---
-        if device == 'cuda':
-           # G = build_cugraph(data)
-            partition, Q = run_louvain_gpu(G, num_nodes, new_res)
-            #partition, Q = cugraph.leiden(G, random_state=42, resolution=new_res)
-        else:
-            partition, Q = run_louvain_cpu(data, num_nodes, new_res)
-        
-        print(f"[✓] Resolution={new_res} → {max(partition)+1} communities (Q={Q:.4f})")
-        #print(f"Res = {new_res} ->   Q ={Q:.4f}")
-        tried[new_res] = Q
-        partitions[new_res] = partition
+        # Run candidate (this will apply Theorem-1 filtering if enabled)
+        eval_candidate(float(new_res))
 
     # --- Cleanup GPU ---
-    if device == 'cuda':
-        del G
+    if device == 'cuda' and G is not None:
+        try:
+            del G
+        except Exception:
+            pass
         cleanup_gpu_memory()
 
     # --- Filter valid resolutions ---
     filtered_resolutions, partition_list, num_communities_list = [], [], []
     filtered_modularity = []
     modularity_dict = {}
+
     for r in sorted(tried.keys()):
         Q = tried[r]
         if Q >= min_modularity:
+            # Apply Theorem-1 filtering ONLY at the end (post-search), if enabled
+            if enforce_theorem1 and (not theorem1_ok.get(r, False)):
+                m = theorem1_metrics.get(r, {})
+                print(
+                    f"[⚠️] Discarding {r:.3f} (fails Thm1 vs base@{base_resolution}: "
+                    f"ΔI={m.get('dI', float('nan')):.6f}, ΔH={m.get('dH', float('nan')):.6f}, "
+                    f"ΔI/ΔH={m.get('ratio', float('nan')):.6f} ≤ thr={m.get('thr', float('nan')):.6f})"
+                )
+                continue
             filtered_resolutions.append(r)
             filtered_modularity.append(Q)
             partition_list.append(partitions[r])
@@ -208,13 +366,13 @@ def find_adaptive_resolutions(
         print("[❌] No valid resolution found")
         return None, None, None, None
 
-    # --- Choose best resolution ---
-    #selected_initial = [r for r in initial_res if r in filtered_resolutions]
-    selected_initial = [r  for r in filtered_resolutions if r >= 1  and r < 10]
+    # --- Choose best resolution (keeps your original selection rule) ---
+    selected_initial = [r for r in filtered_resolutions if r >= 1 and r < 10]
     if len(selected_initial) < 1:
         best_r = min(filtered_resolutions)
     else:
         best_r = min(selected_initial)
+
     best_partition = partitions[best_r]
 
     # --- Save best partition ---
@@ -222,27 +380,26 @@ def find_adaptive_resolutions(
     for node, cid in enumerate(best_partition):
         communities.setdefault(cid, []).append(node)
     comm_list = list(communities.values())
+
     with open(f"comm_res{best_r}.pkl", 'wb') as f:
         pickle.dump(comm_list, f)
 
     print(f"[📦] Saved best resolution {best_r} → {len(comm_list)} communities (Q={modularity_dict[best_r]:.4f})")
     print(f"[✅] Final Resolutions: {filtered_resolutions}")
     print(f"[✅] Final Modularity: {filtered_modularity}")
-    diffs = [abs(filtered_modularity[i] - filtered_modularity[i+1]) for i in range(len(filtered_modularity)-1)]
-    avg_gap = sum(diffs) / len(diffs)
-    print(f"[✅] Used modularity {len(filtered_modularity)} Average modularity gap:{avg_gap}")
+
+    if len(filtered_modularity) >= 2:
+        diffs = [abs(filtered_modularity[i] - filtered_modularity[i+1]) for i in range(len(filtered_modularity)-1)]
+        avg_gap = sum(diffs) / len(diffs)
+        print(f"[✅] Used modularity {len(filtered_modularity)} Average modularity gap:{avg_gap}")
+    else:
+        print(f"[✅] Used modularity {len(filtered_modularity)} (avg gap undefined with <2 points)")
+
     return best_r, filtered_resolutions, partition_list, num_communities_list
 
-
-
-
-
-
-
-
-
-
 def generate_louvain_embeddings(data, args, device='cuda'):
+    random.seed(args.seed)
+
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f"[INFO] Using device: {device}")
 
@@ -265,9 +422,10 @@ def generate_louvain_embeddings(data, args, device='cuda'):
         # ---------------------------
     # 🔹 Check cache folder
     # ---------------------------
-    """   
+    """
     cache_dir = args.dataset
     cache_file = None
+    
     if cache_dir is not None:
         os.makedirs("cache_dir", exist_ok=True)
         cache_file = os.path.join("cache_dir", cache_dir +"_louvain_cache.pt")
@@ -361,7 +519,6 @@ def generate_louvain_embeddings(data, args, device='cuda'):
         with open(f"comm_res{best_r}.pkl", 'wb') as f:
             pickle.dump(partition_list, f)
 
-        print(f"[🏆] Best resolution = {best_r} → {len(communities)} communities (modularity={best_modularity:.4f})")
 
 
     all_community_ids = community_ids_per_res
@@ -375,7 +532,7 @@ def generate_louvain_embeddings(data, args, device='cuda'):
     # ---------------------------
     # 🔹 Save results into cache folder
     # ---------------------------
-    """
+    """         
     if cache_file is not None:
         torch.save({
             "best_r": best_r,
@@ -389,4 +546,3 @@ def generate_louvain_embeddings(data, args, device='cuda'):
 
 
     return best_r, community_embeddings, all_community_ids, num_communities_list, resolutions
-
