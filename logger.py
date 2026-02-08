@@ -71,7 +71,6 @@ class Logger(object):
                         f"{args.res}, "
                         f"{args.epochs}, "
                         f"{args.num_layers}, "
-                        f"comres: {args.comres}, "
                         f"hidden_channels: {args.hidden_channels}, "
                         f"emb_dim: {args.emb_dim}, "
                         f"batch_size: {args.batch_size}, "
@@ -82,6 +81,8 @@ class Logger(object):
                         f"dropout: {args.dropout}, "
                         f"seed: {args.seed}, "
                         f"metric: {args.metric}, "
+                        f"LPF: {args.LPF}, "
+                        f"NF: {args.NF}, "
                         f'Highest Train: {r0.mean():.2f} ± {r0.std():.2f}, '
                         f'Highest Test: {r1.mean():.2f} ± {r1.std():.2f}, '
                         f'Highest Valid: {r2.mean():.2f} ± {r2.std():.2f}, '
@@ -131,11 +132,3 @@ def save_result(args, results):
     args.model = "MLP"
     filename = f'results/{args.dataset}.csv'
     print(f"Saving results to {filename}")
-    """
-    with open(f"{filename}", 'a+') as write_obj:
-        write_obj.write(
-            f"{args.model} " + f"{args.res} " + f"{args.hidden_channels} " + f"{args.num_layers} " + f"{args.dropout} " + \
-            #+ f"{args.ln} " f"{args.bn} " + f"{args.res} " + \
-            f"{results.mean():.2f} $\pm$ {results.std():.2f} \n")
-    """
-
