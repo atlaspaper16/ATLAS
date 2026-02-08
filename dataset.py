@@ -651,25 +651,6 @@ def load_coauthor_dataset(data_dir, name):
     dataset.num_nodes = data.num_nodes
 
     return dataset
-"""
-def load_ogb_dataset(data_dir, name):
-    dataset = NCDataset(name)
-    ogb_dataset = PygNodePropPredDataset(name=name, root=f'{data_dir}/ogb')
-    #PygNodePropPredDataset(name='ogbn-products')
-    dataset.graph = ogb_dataset.graph
-    dataset.graph['edge_index'] = torch.as_tensor(dataset.graph['edge_index'])
-    dataset.graph['node_feat'] = torch.as_tensor(dataset.graph['node_feat'])
-
-    def ogb_idx_to_tensor():
-        split_idx = ogb_dataset.get_idx_split()
-        tensor_split_idx = {key: torch.as_tensor(
-            split_idx[key]) for key in split_idx}
-        return tensor_split_idx
-    dataset.load_fixed_splits = ogb_idx_to_tensor  # ogb_dataset.get_idx_split
-    dataset.label = torch.as_tensor(ogb_dataset.labels).reshape(-1, 1)
-    dataset.num_nodes = dataset.graph['num_nodes']
-    return dataset
-"""
 
 def load_ogb_dataset(data_dir, name):
     dataset = NCDataset(name)
