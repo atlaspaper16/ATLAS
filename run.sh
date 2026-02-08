@@ -15,7 +15,7 @@ python main_community.py --dataset chameleon-filtered --res 'none' --epochs 30 -
 python main_community.py --dataset chameleon-filtered --res 'none' --epochs 30 --batch_size 256 --num_layers 1 --dropout 0.5 --min_q 0.7 --del_q 0.1 --train_prop 0.6 --valid_prop 0.2 --runs 10 --metric acc --lr .001 --LPF 2
 
 python main_community.py   --dataset actor   --res 'None'   --epochs 400   --batch_size 7600   --num_layers 3   --dropout 0.8   --hidden_channels 256   --lr 0.0001 --weight_decay 0.001   --train_prop 0.6 --valid_prop 0.2   --runs 10 --rand_split   --metric acc --display_step 50 --min_q 1 --del_q 0.1 --weight_decay 0.001
-python main_community.py   --dataset actor   --res 'None'   --epochs 400   --batch_size 7600   --num_layers 3   --dropout 0.8   --hidden_channels 256   --lr 0.0001 --weight_decay 0.001   --train_prop 0.6 --valid_prop 0.2   --runs 10 --rand_split   --metric acc --display_step 50 --min_q 1 --del_q 0.1 --weight_decay 0.001 --LPF 1
+python main_community.py --dataset roman-empire --res '0' --epochs 600 --batch_size 11600 --min_q 1.0 --del_q 0.1 --runs 10 --metric acc --display_step 100  --lr .01 --hidden_channels 792 --num_layers 3 --LPF 1 --NF
 
 python main_community.py --dataset tolokers --res '0.5 0.75 1 1.364' --epochs 2000 --batch_size 512 --dropout 0.5 --num_layers 2 --min_q 0.3 --del_q 0.1 --metric rocauc --runs 10 --display_step 100
 python main_community.py --dataset tolokers --res '0.5 0.75 1 1.364' --epochs 2000 --batch_size 512 --dropout 0.5 --num_layers 2 --min_q 0.3 --del_q 0.1 --metric rocauc --runs 10 --display_step 100 --LPF 2
