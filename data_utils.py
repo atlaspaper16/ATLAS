@@ -46,117 +46,54 @@ def build_cugraph_from_edge_index(edge_index: torch.Tensor, directed: bool = Fal
     G.from_cudf_edgelist(gdf, source='src', destination='dst')
     return G
 
-# ==============================
-# Ensure at least one train node per component
-# ==============================
-
-def ensure_train_per_component(G, splits):
-    n_cc, df, label_col = connected_components_count(G)
-    
-    # Sort components by size (ascending)
-    comp_sizes = df[label_col].value_counts().reset_index()
-    comp_sizes = comp_sizes.rename(columns={label_col: 'component', 'count': 'size'})
-    comp_sizes = comp_sizes.sort_values('size', ascending=True)
-
-    train = set(splits['train'].tolist())
-    valid = set(splits['valid'].tolist())
-    test = set(splits['test'].tolist())
-
-    for comp_id in comp_sizes['component'].to_pandas().tolist():
-        nodes = df[df[label_col] == comp_id]['vertex'].to_pandas().tolist()
-        # Check if any node is already in train
-        if any(node in train for node in nodes):
-            continue
-        # Pick a random node from this component
-        chosen = random.choice(nodes)
-        train.add(chosen)
-        if chosen in valid:
-            valid.remove(chosen)
-        elif chosen in test:
-            test.remove(chosen)
-
-    # Convert back to tensors
-    splits_out = {
-        'train': torch.tensor(list(train), dtype=torch.long),
-        'valid': torch.tensor(list(valid), dtype=torch.long),
-        'test':  torch.tensor(list(test), dtype=torch.long)
-    }
-    return splits_out
 
 
 
 
-# --------- Example (GPU) ---------
-# device = torch.device("cuda")
-# edge_index = edge_index.to(device)                     # [2, E] LongTensor on CUDA
-# splits = {k: v.to(device, dtype=torch.long) for k, v in splits.items()}
-# labels = cc_labels(edge_index, num_nodes=data.num_nodes)  # stays on GPU
-# print("CCs:", cc_count(labels))
-# splits = ensure_train_has_all_components(splits, labels, prefer="valid")
-# splits_lst.append(splits)
-
-
-
-
-
-
-
-def even_quantile_labels(vals, nclasses, verbose=True):
-    """ partitions vals into nclasses by a quantile based split,
-    where the first class is less than the 1/nclasses quantile,
-    second class is less than the 2/nclasses quantile, and so on
-    
-    vals is np array
-    returns an np array of int class labels
+def cap_val_test_overflow_to_train(train_mask, val_mask, test_mask,
+                                   train_prop=0.6, valid_prop=0.2,
+                                   seed=42):
     """
-    label = -1 * np.ones(vals.shape[0], dtype=int)
-    interval_lst = []
-    lower = -np.inf
-    for k in range(nclasses - 1):
-        upper = np.nanquantile(vals, (k + 1) / nclasses)
-        interval_lst.append((lower, upper))
-        inds = (vals >= lower) * (vals < upper)
-        label[inds] = k
-        lower = upper
-    label[vals >= lower] = nclasses - 1
-    interval_lst.append((lower, np.inf))
-    if verbose:
-        print('Class Label Intervals:')
-        for class_idx, interval in enumerate(interval_lst):
-            print(f'Class {class_idx}: [{interval[0]}, {interval[1]})]')
-    return label
+    Enforce target counts by moving overflow from val/test into train.
+    Keeps behavior deterministic with a fixed seed.
+    """
+    assert train_mask.dtype == torch.bool
+    assert val_mask.dtype == torch.bool
+    assert test_mask.dtype == torch.bool
+    assert train_mask.numel() == val_mask.numel() == test_mask.numel()
 
-"""
-def rand_train_test_idx(label, train_prop=0.6, valid_prop=0.2, ignore_negative=True, pkl_path=None):
-    if ignore_negative:
-        labeled_nodes = torch.where(label != -1)[0]
-    else:
-        labeled_nodes = label
+    num_nodes = train_mask.numel()
+    n_train = int(train_prop * num_nodes)
+    n_val   = int(valid_prop * num_nodes)
+    n_test  = num_nodes - (n_train + n_val)
 
-    n = labeled_nodes.shape[0]
-    train_num = int(n * train_prop)
-    valid_num = int(n * valid_prop)
+    g = torch.Generator(device=train_mask.device)
+    g.manual_seed(seed)
 
-    perm = torch.as_tensor(np.random.permutation(n))
+    # ---- cap validation ----
+    val_idx = val_mask.nonzero(as_tuple=False).view(-1)
+    if val_idx.numel() > n_val:
+        perm = torch.randperm(val_idx.numel(), generator=g, device=val_idx.device)
+        overflow = val_idx[perm[n_val:]]   # extra nodes beyond target
+        val_mask[overflow] = False
+        train_mask[overflow] = True
 
-    train_indices = perm[:train_num]
-    val_indices = perm[train_num : train_num + valid_num]
-    test_indices = perm[train_num + valid_num :]
+    # ---- cap test ----
+    test_idx = test_mask.nonzero(as_tuple=False).view(-1)
+    if test_idx.numel() > n_test:
+        perm = torch.randperm(test_idx.numel(), generator=g, device=test_idx.device)
+        overflow = test_idx[perm[n_test:]] # extra nodes beyond target
+        test_mask[overflow] = False
+        train_mask[overflow] = True
 
-    if not ignore_negative:
-        return train_indices, val_indices, test_indices
+    # Recompute indices for printing / downstream use
+    train_idx = train_mask.nonzero(as_tuple=False).view(-1)
+    val_idx   = val_mask.nonzero(as_tuple=False).view(-1)
+    test_idx  = test_mask.nonzero(as_tuple=False).view(-1)
 
-    train_idx = labeled_nodes[train_indices]
-    valid_idx = labeled_nodes[val_indices]
-    test_idx = labeled_nodes[test_indices]
+    return train_mask, val_mask, test_mask, train_idx, val_idx, test_idx, (n_train, n_val, n_test)
 
-    # Print the sizes
-    print(f"Size of the training set: {len(train_idx)}")
-    print(f"Size of the validation set: {len(valid_idx)}")
-    print(f"Size of the test set: {len(test_idx)}")
 
-    return train_idx, valid_idx, test_idx
-"""
 
 def rand_train_test_idx(label, train_prop=0.6, valid_prop=0.2, ignore_negative=True, pkl_path=None):
     """
@@ -187,28 +124,6 @@ def rand_train_test_idx(label, train_prop=0.6, valid_prop=0.2, ignore_negative=T
                 continue
 
             random.shuffle(community)
-            """
-            
-            n = len(community)
-
-            # Compute base split sizes
-            n_train = int(train_prop * n)
-            n_val   = int(valid_prop * n)
-            n_test  = n - (n_train + n_val)
-
-            # Force val and test to be equal size = max(n_val, n_test)
-            split_size = min(n_val, n_test)
-            n_val = split_size
-            n_test = split_size
-
-            # Adjust train to take the remaining nodes
-            n_train = n - (n_val + n_test)
-
-            # Assign masks
-            train_mask[community[:n_train]] = True
-            val_mask[community[n_train:n_train + n_val]] = True
-            test_mask[community[n_train + n_val:n_train + n_val + n_test]] = True
-            """
             n = len(community)
             n_train = int(train_prop * n)
             n_val = int(valid_prop * n)
@@ -224,6 +139,12 @@ def rand_train_test_idx(label, train_prop=0.6, valid_prop=0.2, ignore_negative=T
         train_idx = train_mask.nonzero(as_tuple=False).view(-1)
         val_idx = val_mask.nonzero(as_tuple=False).view(-1)
         test_idx = test_mask.nonzero(as_tuple=False).view(-1)
+
+        train_mask, val_mask, test_mask, train_idx, val_idx, test_idx, targets = cap_val_test_overflow_to_train(
+                train_mask, val_mask, test_mask,
+                train_prop=0.6, valid_prop=0.2, seed=42
+            )   
+
 
     else:
         labeled_nodes = torch.where(label != -1)[0] if ignore_negative else torch.arange(num_nodes)
@@ -245,32 +166,6 @@ def rand_train_test_idx(label, train_prop=0.6, valid_prop=0.2, ignore_negative=T
 
 
     return train_idx, val_idx, test_idx
-
-
-
-
-def class_rand_splits(label, label_num_per_class, valid_num=500, test_num=1000):
-    """use all remaining data points as test data, so test_num will not be used"""
-    train_idx, non_train_idx = [], []
-    idx = torch.arange(label.shape[0])
-    class_list = label.squeeze().unique()
-    for i in range(class_list.shape[0]):
-        c_i = class_list[i]
-        idx_i = idx[label.squeeze() == c_i]
-        n_i = idx_i.shape[0]
-        rand_idx = idx_i[torch.randperm(n_i)]
-        train_idx += rand_idx[:label_num_per_class].tolist()
-        non_train_idx += rand_idx[label_num_per_class:].tolist()
-    train_idx = torch.as_tensor(train_idx)
-    non_train_idx = torch.as_tensor(non_train_idx)
-    non_train_idx = non_train_idx[torch.randperm(non_train_idx.shape[0])]
-    valid_idx, test_idx = (
-        non_train_idx[:valid_num],
-        non_train_idx[valid_num : valid_num + test_num],
-    )
-    print(f"train:{train_idx.shape}, valid:{valid_idx.shape}, test:{test_idx.shape}")
-    split_idx = {"train": train_idx, "valid": valid_idx, "test": test_idx}
-    return split_idx
 
 
 
@@ -474,26 +369,6 @@ def load_fixed_splits(data_dir, dataset, name, pkl_path=None):
     elif name.startswith("ogbn-"):
         pyg_dataset = PygNodePropPredDataset(name=name, root=f"{data_dir}/ogb")
         
-        """
-        device = torch.device("cuda")
-
-        pyg_dataset = PygNodePropPredDataset(name=name, root=f"{data_dir}/ogb")
-        data = pyg_dataset[0]
-
-        edge_index = data.edge_index
-        G = build_cugraph_from_edge_index(edge_index, directed=False)
-
-        split_idx = pyg_dataset.get_idx_split()
-        splits = {
-            "train": torch.as_tensor(split_idx["train"]),
-            "valid": torch.as_tensor(split_idx["valid"]),
-            "test": torch.as_tensor(split_idx["test"]),
-        }
-
-        fixed_splits = ensure_train_per_component(G, splits)
-        splits_lst.append(fixed_splits)
-
-        """
         split_idx = pyg_dataset.get_idx_split()
         splits = {
             "train": torch.as_tensor(split_idx["train"]),
@@ -583,61 +458,9 @@ def eval_rocauc(y_true, y_pred):
 
 
 
-"""
-def eval_rocauc(y_true, y_pred):
-    rocauc_list = []
-    y_true = y_true.detach().cpu().numpy()
-    if y_true.shape[1] == 1:
-        # use the predicted class for single-class classification
-        y_pred = F.softmax(y_pred, dim=-1)[:,1].unsqueeze(1).cpu().numpy()
-    else:
-        y_pred = y_pred.detach().cpu().numpy()
-
-    for i in range(y_true.shape[1]):
-        # AUC is only defined when there is at least one positive data.
-        if np.sum(y_true[:, i] == 1) > 0 and np.sum(y_true[:, i] == 0) > 0:
-            is_labeled = y_true[:, i] == y_true[:, i]
-            score = roc_auc_score(y_true[is_labeled, i], y_pred[is_labeled, i])
-
-            rocauc_list.append(score)
-
-    if len(rocauc_list) == 0:
-        raise RuntimeError(
-            'No positively labeled data available. Cannot compute ROC-AUC.')
-
-    return sum(rocauc_list)/len(rocauc_list)
-
-def eval_rocauc(y_true, y_pred):
-    y_true = y_true.detach().cpu().numpy()
-
-    # --- Multi-label case: y_true shape [N, C] with >1 classes possible per node ---
-    if y_true.ndim == 2 and y_true.shape[1] > 1 and y_true.max() <= 1:
-        y_pred = torch.sigmoid(y_pred).detach().cpu().numpy()
-        rocauc_list = []
-        for i in range(y_true.shape[1]):
-            if np.sum(y_true[:, i] == 1) > 0 and np.sum(y_true[:, i] == 0) > 0:
-                score = roc_auc_score(y_true[:, i], y_pred[:, i])
-                rocauc_list.append(score)
-        if len(rocauc_list) == 0:
-            raise RuntimeError('No positive labels for ROC-AUC in multi-label task.')
-        return float(np.mean(rocauc_list))
-
-    # --- Binary case: y_true shape [N] or [N,1], model output [N,2] ---
-    if y_true.ndim == 1 or (y_true.ndim == 2 and y_true.shape[1] == 1):
-        y_pred = F.softmax(y_pred, dim=-1)[:, 1].unsqueeze(1).cpu().numpy()
-        if y_true.ndim == 2:
-            y_true = y_true.squeeze(1)
-        return roc_auc_score(y_true, y_pred)
-
-    # --- Multi-class case: one label per node, >2 classes ---
-    y_pred = F.softmax(y_pred, dim=-1).detach().cpu().numpy()
-    y_true = y_true.astype(int).reshape(-1)
-    return roc_auc_score(y_true, y_pred, multi_class="ovr", average="macro")
-"""
 
 dataset_drive_url = {
     'snap-patents' : '1ldh23TSY1PwXia6dU0MYcpyEgX-w3Hia',
     'pokec' : '1dNs5E7BrWJbgcHeQ_zuy5Ozp2tRCWG0y',
     'yelp-chi': '1fAXtTVQS4CfEk4asqrFw9EPmlUPGbGtJ',
 }
-
