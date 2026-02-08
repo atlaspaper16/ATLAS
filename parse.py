@@ -39,21 +39,10 @@ def parser_add_main_args(parser):
     parser.add_argument('--eval_batch', action='store_true',
                     help='Use batched evaluation (mini-batch) instead of full-batch.')
 
-
-    # GNN
-    """
-    parser.add_argument('--gnn', type=str, default='gcn')
-    parser.add_argument('--hidden_channels', type=int, default=256)
-    parser.add_argument('--local_layers', type=int, default=7)
-    parser.add_argument('--num_heads', type=int, default=1,
-                        help='number of heads for attention')
-    parser.add_argument('--pre_ln', action='store_true')
-    parser.add_argument('--pre_linear', action='store_true')
-    parser.add_argument('--res', action='store_true', help='use residual connections for GNNs')
-    parser.add_argument('--ln', action='store_true', help='use normalization for GNNs')
-    parser.add_argument('--bn', action='store_true', help='use normalization for GNNs')
-    parser.add_argument('--jk', action='store_true', help='use JK for GNNs')
-    """
+    parser.add_argument('--NF', action='store_true',
+                        help='Enable Neighbour Feature (default: disabled)')
+    parser.add_argument('--LPF', type=int, default=-1,
+                     help='LPF level (int). Enabled if > 0; set 0/-1 to disable.')
     # training
     parser.add_argument('--lr', type=float, default=0.0001)
     parser.add_argument('--weight_decay', type=float, default=5e-4)# 5e-4
@@ -66,6 +55,3 @@ def parser_add_main_args(parser):
 
     parser.add_argument('--res', type=str, default='1',
                     help="List of Louvain resolutions, e.g. --res 1.0 2.0 3.0 or 'None'")
-    parser.add_argument('--comres', type=int, default=1,
-                    help="sample train/test/validation nodes by community resolution either 1 or 2 or -1")
-
