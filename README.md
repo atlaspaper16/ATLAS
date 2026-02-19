@@ -1,3 +1,5 @@
+## ATLAS: Adaptive Topology-based Learning at Scale for Homophilic and Heterophilic Graphs
+
 ## Environment Setup.
 
 ```
